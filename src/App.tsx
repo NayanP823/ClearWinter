@@ -88,18 +88,50 @@ export default function App() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [locationModalOpen, setLocationModalOpen] = useState(false);
 
-  const [largeText, setLargeText] = useState<boolean>(() =>
-    readStorage<boolean>(STORAGE_KEYS.largeText, false),
-  );
-  const [city, setCity] = useState<CityLocation>(() =>
-    readStorage<CityLocation>(STORAGE_KEYS.city, PRESET_CITIES[0]),
-  );
-  const [profile, setProfile] = useState<HouseholdProfile>(() =>
-    readStorage<HouseholdProfile>(STORAGE_KEYS.profile, DEFAULT_HOUSEHOLD_PROFILE),
-  );
-  const [selectedActionIds, setSelectedActionIds] = useState<string[]>(() =>
-    readStorage<string[]>(STORAGE_KEYS.selectedIds, DEFAULT_SELECTED_IDS),
-  );
+  const [largeText, setLargeText] = useState<boolean>(() => {
+    const stored = readStorage<unknown>(STORAGE_KEYS.largeText, false);
+    return typeof stored === 'boolean' ? stored : false;
+  });
+  const [city, setCity] = useState<CityLocation>(() => {
+    const stored = readStorage<Partial<CityLocation> | null>(STORAGE_KEYS.city, null);
+    if (
+      stored &&
+      typeof stored === 'object' &&
+      typeof stored.name === 'string' &&
+      typeof stored.latitude === 'number' &&
+      Number.isFinite(stored.latitude) &&
+      typeof stored.longitude === 'number' &&
+      Number.isFinite(stored.longitude)
+    ) {
+      return { ...PRESET_CITIES[0], ...stored };
+    }
+    return PRESET_CITIES[0];
+  });
+  const [profile, setProfile] = useState<HouseholdProfile>(() => {
+    const stored = readStorage<Partial<HouseholdProfile> | null>(
+      STORAGE_KEYS.profile,
+      null,
+    );
+    if (stored && typeof stored === 'object') {
+      return {
+        ...DEFAULT_HOUSEHOLD_PROFILE,
+        ...stored,
+        sensitiveGroups: Array.isArray(stored.sensitiveGroups)
+          ? stored.sensitiveGroups
+          : DEFAULT_HOUSEHOLD_PROFILE.sensitiveGroups,
+      };
+    }
+    return DEFAULT_HOUSEHOLD_PROFILE;
+  });
+  const [selectedActionIds, setSelectedActionIds] = useState<string[]>(() => {
+    const stored = readStorage<unknown>(
+      STORAGE_KEYS.selectedIds,
+      DEFAULT_SELECTED_IDS,
+    );
+    return Array.isArray(stored)
+      ? stored.filter((id): id is string => typeof id === 'string')
+      : DEFAULT_SELECTED_IDS;
+  });
 
   const [snapshot, setSnapshot] = useState<AirQualitySnapshot>(() =>
     buildSeasonalBaselineSnapshot(city),
@@ -216,9 +248,11 @@ export default function App() {
   );
 
   const allActions: SmogAction[] = useMemo(() => {
-    const merged = aiPlan
-      ? [...aiPlan.actions, ...DEFAULT_SMOG_ACTIONS]
-      : DEFAULT_SMOG_ACTIONS;
+    const aiActions = Array.isArray(aiPlan?.actions) ? aiPlan.actions : [];
+    const merged =
+      aiActions.length > 0
+        ? [...aiActions, ...DEFAULT_SMOG_ACTIONS]
+        : DEFAULT_SMOG_ACTIONS;
     return rankActionsForProfile(merged, profile, snapshot);
   }, [aiPlan, profile, snapshot]);
 
@@ -266,11 +300,20 @@ export default function App() {
         profile,
         airQuality: buildAirQualityContext(snapshot, inversion, ventilation),
       });
-      setAiPlan(generated);
-      const topAiIds = generated.actions.slice(0, 2).map((a) => a.id);
+      const generatedActions = Array.isArray(generated?.actions)
+        ? generated.actions
+        : [];
+      if (generatedActions.length === 0) {
+        throw new Error(
+          'The AI advisor returned an incomplete plan. Please try again in a moment.',
+        );
+      }
+      const safePlan: AiActionPlan = { ...generated, actions: generatedActions };
+      setAiPlan(safePlan);
+      const topAiIds = generatedActions.slice(0, 2).map((a) => a.id);
       setSelectedActionIds((prev) => Array.from(new Set([...topAiIds, ...prev])));
       setLiveStatusAnnouncement(
-        `Your family plan is ready with ${generated.actions.length} steps for ${snapshot.city.name}.`,
+        `Your family plan is ready with ${generatedActions.length} steps for ${snapshot.city.name}.`,
       );
     } catch (err) {
       setAiError(

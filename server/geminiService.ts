@@ -235,42 +235,89 @@ export async function generateTailoredSmogPlan(
     throw new Error('Empty response received from Gemini model');
   }
 
-  const parsed = JSON.parse(rawText) as RawGeminiPlan;
-  const actions: SmogAction[] = (parsed.actions ?? []).slice(0, 8).map((item, idx) => ({
-    id: `ai-action-${Date.now()}-${idx}`,
-    title: sanitizeText(item.title, 110),
-    category: item.category,
-    timeSlot: item.timeSlot,
-    costTier: item.costTier,
-    difficulty: item.difficulty,
-    summary: sanitizeText(item.summary, 240),
-    steps: (item.steps ?? []).slice(0, 4).map((s) => sanitizeText(s, 180)),
-    indoorPm25ReductionFraction: Math.min(
-      0.55,
-      Math.max(0, Number(item.indoorPm25ReductionFraction) || 0),
-    ),
-    dailyCo2eSavedGrams: Math.min(
-      6000,
-      Math.max(0, Math.round(Number(item.dailyCo2eSavedGrams) || 0)),
-    ),
-    dailyLocalPm25SavedMg: Math.min(
-      500,
-      Math.max(0, Math.round(Number(item.dailyLocalPm25SavedMg) || 0)),
-    ),
-    dailySavingsInr: Math.min(
-      500,
-      Math.max(0, Math.round(Number(item.dailySavingsInr) || 0)),
-    ),
-    directImpactExplanation: sanitizeText(item.directImpactExplanation, 280),
-    origin: 'gemini-tailored',
-  }));
+  const cleanedJson = rawText
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/, '')
+    .trim();
+
+  const parsed = JSON.parse(cleanedJson) as Partial<RawGeminiPlan>;
+  const rawActions = Array.isArray(parsed?.actions) ? parsed.actions : [];
+
+  const validCategories = new Set(['routine', 'indoor_hack', 'sustainable_alt']);
+  const validSlots = new Set(['morning', 'midday', 'evening', 'anytime']);
+  const validTiers = new Set(['Free', 'Low Cost', 'Investment']);
+  const validDifficulties = new Set(['Easy', 'Moderate', 'Community']);
+
+  const actions: SmogAction[] = rawActions
+    .filter((item): item is NonNullable<RawGeminiPlan['actions'][number]> =>
+      Boolean(item && typeof item === 'object' && typeof item.title === 'string' && item.title.trim().length > 0),
+    )
+    .slice(0, 8)
+    .map((item, idx) => ({
+      id: `ai-action-${Date.now()}-${idx}`,
+      title: sanitizeText(item.title, 110),
+      category: validCategories.has(item.category) ? item.category : 'routine',
+      timeSlot: validSlots.has(item.timeSlot) ? item.timeSlot : 'anytime',
+      costTier: validTiers.has(item.costTier) ? item.costTier : 'Free',
+      difficulty: validDifficulties.has(item.difficulty) ? item.difficulty : 'Easy',
+      summary: sanitizeText(typeof item.summary === 'string' ? item.summary : '', 240),
+      steps: (Array.isArray(item.steps) ? item.steps : [])
+        .filter((s): s is string => typeof s === 'string' && s.trim().length > 0)
+        .slice(0, 4)
+        .map((s) => sanitizeText(s, 180)),
+      indoorPm25ReductionFraction: Math.min(
+        0.55,
+        Math.max(0, Number(item.indoorPm25ReductionFraction) || 0),
+      ),
+      dailyCo2eSavedGrams: Math.min(
+        6000,
+        Math.max(0, Math.round(Number(item.dailyCo2eSavedGrams) || 0)),
+      ),
+      dailyLocalPm25SavedMg: Math.min(
+        500,
+        Math.max(0, Math.round(Number(item.dailyLocalPm25SavedMg) || 0)),
+      ),
+      dailySavingsInr: Math.min(
+        500,
+        Math.max(0, Math.round(Number(item.dailySavingsInr) || 0)),
+      ),
+      directImpactExplanation: sanitizeText(
+        typeof item.directImpactExplanation === 'string'
+          ? item.directImpactExplanation
+          : '',
+        280,
+      ),
+      origin: 'gemini-tailored',
+    }));
+
+  if (actions.length === 0) {
+    throw new Error('Gemini returned a plan with no valid actions');
+  }
 
   return {
     generatedAt: new Date().toISOString(),
-    headline: sanitizeText(parsed.headline, 140),
-    locationContextSummary: sanitizeText(parsed.locationContextSummary, 420),
-    ventilationGuidance: sanitizeText(parsed.ventilationGuidance, 320),
-    communityBrief: sanitizeText(parsed.communityBrief, 600),
+    headline: sanitizeText(
+      typeof parsed?.headline === 'string' && parsed.headline.trim()
+        ? parsed.headline
+        : `Winter Air Plan for ${payload.airQuality.cityName}`,
+      140,
+    ),
+    locationContextSummary: sanitizeText(
+      typeof parsed?.locationContextSummary === 'string'
+        ? parsed.locationContextSummary
+        : '',
+      420,
+    ),
+    ventilationGuidance: sanitizeText(
+      typeof parsed?.ventilationGuidance === 'string'
+        ? parsed.ventilationGuidance
+        : '',
+      320,
+    ),
+    communityBrief: sanitizeText(
+      typeof parsed?.communityBrief === 'string' ? parsed.communityBrief : '',
+      600,
+    ),
     actions,
   };
 }

@@ -1,3 +1,4 @@
+import { normalizeAiActionPlan } from '../domain/impactCalculator';
 import type {
   AiActionPlan,
   AirQualitySnapshot,
@@ -43,6 +44,31 @@ export function buildAirQualityContext(
   };
 }
 
+async function parseJsonSafe(res: Response): Promise<unknown> {
+  const text = await res.text();
+  if (!text.trim()) {
+    return null;
+  }
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+function extractApiError(body: unknown, fallback: string): string {
+  if (
+    body &&
+    typeof body === 'object' &&
+    'error' in body &&
+    typeof (body as { error?: unknown }).error === 'string' &&
+    (body as { error: string }).error.trim().length > 0
+  ) {
+    return (body as { error: string }).error.trim();
+  }
+  return fallback;
+}
+
 export async function fetchCityAirQuality(
   city: CityLocation,
 ): Promise<AirQualitySnapshot> {
@@ -55,22 +81,36 @@ export async function fetchCityAirQuality(
     lon: String(city.longitude),
   });
   const res = await fetch(`/api/air-quality?${params.toString()}`);
+  const body = await parseJsonSafe(res);
   if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new Error(body.error ?? 'Failed to load air quality data.');
+    throw new Error(extractApiError(body, 'Failed to load air quality data.'));
   }
-  return (await res.json()) as AirQualitySnapshot;
+  if (
+    !body ||
+    typeof body !== 'object' ||
+    !Array.isArray((body as Partial<AirQualitySnapshot>).hourly) ||
+    typeof (body as Partial<AirQualitySnapshot>).usAqi !== 'number'
+  ) {
+    throw new Error('Received incomplete air quality data. Using seasonal baseline.');
+  }
+  return body as AirQualitySnapshot;
 }
 
 export async function searchCitiesApi(query: string): Promise<CityLocation[]> {
   const params = new URLSearchParams({ q: query });
   const res = await fetch(`/api/locations/search?${params.toString()}`);
+  const body = await parseJsonSafe(res);
   if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new Error(body.error ?? 'City search failed.');
+    throw new Error(extractApiError(body, 'City search failed.'));
   }
-  const data = (await res.json()) as { results: CityLocation[] };
-  return data.results ?? [];
+  if (
+    body &&
+    typeof body === 'object' &&
+    Array.isArray((body as { results?: unknown }).results)
+  ) {
+    return (body as { results: CityLocation[] }).results;
+  }
+  return [];
 }
 
 export async function generateAiSmogPlan(params: {
@@ -82,13 +122,22 @@ export async function generateAiSmogPlan(params: {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(params),
   });
-  const data = (await res.json().catch(() => ({}))) as AiActionPlan & {
-    error?: string;
-  };
+  const body = await parseJsonSafe(res);
   if (!res.ok) {
-    throw new Error(data.error ?? 'Could not generate tailored AI action plan.');
+    throw new Error(
+      extractApiError(body, 'Could not generate tailored AI action plan.'),
+    );
   }
-  return data;
+  const normalized = normalizeAiActionPlan(body);
+  if (!normalized) {
+    throw new Error(
+      extractApiError(
+        body,
+        'The AI advisor returned an incomplete plan. Please try again in a moment.',
+      ),
+    );
+  }
+  return normalized;
 }
 
 export async function streamAdvisorChat(params: {
@@ -110,8 +159,21 @@ export async function streamAdvisorChat(params: {
   });
 
   if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new Error(body.error ?? 'Unable to reach the AI Smog Advisor.');
+    const body = await parseJsonSafe(res);
+    throw new Error(
+      extractApiError(body, 'Unable to reach the AI Smog Advisor.'),
+    );
+  }
+
+  const contentType = res.headers.get('content-type') ?? '';
+  if (!contentType.includes('text/event-stream')) {
+    const body = await parseJsonSafe(res);
+    throw new Error(
+      extractApiError(
+        body,
+        'The AI advisor is temporarily unavailable. Please try again shortly.',
+      ),
+    );
   }
 
   if (!res.body) {
@@ -141,11 +203,16 @@ export async function streamAdvisorChat(params: {
         }
       }
       if (!dataLine) continue;
-      const parsed = JSON.parse(dataLine) as { text?: string; error?: string };
+      let parsed: { text?: string; error?: string };
+      try {
+        parsed = JSON.parse(dataLine) as { text?: string; error?: string };
+      } catch {
+        continue;
+      }
       if (eventName === 'error') {
         throw new Error(parsed.error ?? 'Streaming error occurred.');
       }
-      if (eventName === 'chunk' && parsed.text) {
+      if (eventName === 'chunk' && typeof parsed.text === 'string' && parsed.text) {
         params.onChunk(parsed.text);
       }
     }

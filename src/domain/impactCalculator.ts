@@ -1,8 +1,12 @@
 import type {
+  ActionCategory,
+  AiActionPlan,
   AirQualitySnapshot,
+  CostTier,
   HouseholdProfile,
   ImpactMetrics,
   SmogAction,
+  TimeSlot,
 } from './types';
 
 export const DEFAULT_HOUSEHOLD_PROFILE: HouseholdProfile = {
@@ -386,6 +390,9 @@ export function rankActionsForProfile(
   profile: HouseholdProfile,
   snapshot: AirQualitySnapshot,
 ): SmogAction[] {
+  if (!Array.isArray(actions)) {
+    return [];
+  }
   return [...actions].sort((a, b) => {
     if (a.origin !== b.origin) {
       return a.origin === 'gemini-tailored' ? -1 : 1;
@@ -401,4 +408,132 @@ export function rankActionsForProfile(
     };
     return score(b) - score(a);
   });
+}
+
+const VALID_CATEGORIES = new Set<ActionCategory>([
+  'routine',
+  'indoor_hack',
+  'sustainable_alt',
+]);
+const VALID_TIME_SLOTS = new Set<TimeSlot>([
+  'morning',
+  'midday',
+  'evening',
+  'anytime',
+]);
+const VALID_COST_TIERS = new Set<CostTier>(['Free', 'Low Cost', 'Investment']);
+const VALID_DIFFICULTIES = new Set<SmogAction['difficulty']>([
+  'Easy',
+  'Moderate',
+  'Community',
+]);
+
+/**
+ * Validates and normalizes an untrusted AI plan API payload.
+ * Returns null if the payload does not contain a valid, non-empty actions array.
+ */
+export function normalizeAiActionPlan(raw: unknown): AiActionPlan | null {
+  if (!raw || typeof raw !== 'object') {
+    return null;
+  }
+
+  const candidate = raw as Record<string, unknown>;
+  if (!Array.isArray(candidate.actions)) {
+    return null;
+  }
+
+  const normalizedActions: SmogAction[] = [];
+  for (let i = 0; i < candidate.actions.length; i += 1) {
+    const item = candidate.actions[i];
+    if (!item || typeof item !== 'object') continue;
+    const rec = item as Record<string, unknown>;
+    const title = typeof rec.title === 'string' ? rec.title.trim() : '';
+    if (!title) continue;
+
+    const category = VALID_CATEGORIES.has(rec.category as ActionCategory)
+      ? (rec.category as ActionCategory)
+      : 'routine';
+    const timeSlot = VALID_TIME_SLOTS.has(rec.timeSlot as TimeSlot)
+      ? (rec.timeSlot as TimeSlot)
+      : 'anytime';
+    const costTier = VALID_COST_TIERS.has(rec.costTier as CostTier)
+      ? (rec.costTier as CostTier)
+      : 'Free';
+    const difficulty = VALID_DIFFICULTIES.has(
+      rec.difficulty as SmogAction['difficulty'],
+    )
+      ? (rec.difficulty as SmogAction['difficulty'])
+      : 'Easy';
+
+    const steps = Array.isArray(rec.steps)
+      ? rec.steps
+          .filter((s): s is string => typeof s === 'string' && s.trim().length > 0)
+          .map((s) => s.trim())
+      : [];
+
+    const id =
+      typeof rec.id === 'string' && rec.id.trim().length > 0
+        ? rec.id.trim()
+        : `ai-action-${Date.now()}-${i}`;
+
+    normalizedActions.push({
+      id,
+      title,
+      category,
+      timeSlot,
+      costTier,
+      difficulty,
+      summary: typeof rec.summary === 'string' ? rec.summary.trim() : '',
+      steps,
+      indoorPm25ReductionFraction: Math.min(
+        0.55,
+        Math.max(0, Number(rec.indoorPm25ReductionFraction) || 0),
+      ),
+      dailyCo2eSavedGrams: Math.min(
+        6000,
+        Math.max(0, Math.round(Number(rec.dailyCo2eSavedGrams) || 0)),
+      ),
+      dailyLocalPm25SavedMg: Math.min(
+        500,
+        Math.max(0, Math.round(Number(rec.dailyLocalPm25SavedMg) || 0)),
+      ),
+      dailySavingsInr: Math.min(
+        500,
+        Math.max(0, Math.round(Number(rec.dailySavingsInr) || 0)),
+      ),
+      directImpactExplanation:
+        typeof rec.directImpactExplanation === 'string'
+          ? rec.directImpactExplanation.trim()
+          : '',
+      origin: 'gemini-tailored',
+    });
+  }
+
+  if (normalizedActions.length === 0) {
+    return null;
+  }
+
+  return {
+    generatedAt:
+      typeof candidate.generatedAt === 'string' && candidate.generatedAt.trim()
+        ? candidate.generatedAt.trim()
+        : new Date().toISOString(),
+    headline:
+      typeof candidate.headline === 'string' && candidate.headline.trim()
+        ? candidate.headline.trim()
+        : 'Tailored Winter Air Plan',
+    locationContextSummary:
+      typeof candidate.locationContextSummary === 'string'
+        ? candidate.locationContextSummary.trim()
+        : '',
+    ventilationGuidance:
+      typeof candidate.ventilationGuidance === 'string'
+        ? candidate.ventilationGuidance.trim()
+        : '',
+    communityBrief:
+      typeof candidate.communityBrief === 'string'
+        ? candidate.communityBrief.trim()
+        : '',
+    actions: normalizedActions,
+  };
 }

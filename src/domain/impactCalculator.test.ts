@@ -7,6 +7,7 @@ import {
   DEFAULT_SMOG_ACTIONS,
   estimateBaselineIndoorPm25,
   formatInr,
+  normalizeAiActionPlan,
   rankActionsForProfile,
 } from './impactCalculator';
 
@@ -92,4 +93,43 @@ test('rankActionsForProfile elevates profile-matched and AI-tailored actions', (
     snapshot,
   );
   assert.equal(ranked[0].id, 'ai-custom-1');
+});
+
+test('normalizeAiActionPlan rejects malformed or non-iterable actions and normalizes valid plans', () => {
+  assert.equal(normalizeAiActionPlan(null), null);
+  assert.equal(normalizeAiActionPlan('<!doctype html>'), null);
+  assert.equal(normalizeAiActionPlan({}), null);
+  assert.equal(normalizeAiActionPlan({ headline: 'Test', actions: 'not-an-array' }), null);
+  assert.equal(normalizeAiActionPlan({ headline: 'Test', actions: {} }), null);
+  assert.equal(normalizeAiActionPlan({ headline: 'Test', actions: [] }), null);
+
+  const normalized = normalizeAiActionPlan({
+    headline: 'Delhi Winter Plan',
+    locationContextSummary: 'Calm winds trap morning smoke.',
+    ventilationGuidance: 'Air rooms briefly between 1 PM and 3 PM.',
+    communityBrief: 'Share RWA carpools this week.',
+    actions: [
+      {
+        title: 'Pause agarbatti and run kitchen chimney',
+        category: 'invalid_category',
+        timeSlot: 'evening',
+        costTier: 'Free',
+        difficulty: 'Easy',
+        summary: 'Keeps indoor PM2.5 low at night.',
+        steps: ['Use electric diya', 123, ''],
+        indoorPm25ReductionFraction: 0.25,
+        dailyCo2eSavedGrams: 300,
+        dailyLocalPm25SavedMg: 40,
+        dailySavingsInr: 20,
+        directImpactExplanation: 'Prevents indoor smoke spikes.',
+      },
+    ],
+  });
+
+  assert.ok(normalized !== null);
+  assert.equal(normalized.actions.length, 1);
+  assert.equal(normalized.actions[0].category, 'routine');
+  assert.deepEqual(normalized.actions[0].steps, ['Use electric diya']);
+  assert.equal(normalized.actions[0].dailySavingsInr, 20);
+  assert.equal(normalized.actions[0].origin, 'gemini-tailored');
 });

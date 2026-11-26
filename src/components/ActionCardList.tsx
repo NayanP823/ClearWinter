@@ -271,34 +271,40 @@ export function ActionCardList({
                       {action.directImpactExplanation}
                     </div>
 
-                    <div className="mt-3">
-                      <button
-                        type="button"
-                        onClick={() => toggleExpand(action.id)}
-                        aria-expanded={isExpanded}
-                        className="min-h-[40px] inline-flex items-center gap-1.5 text-sm font-medium text-teal-800 hover:text-teal-950 py-1.5 cursor-pointer"
-                      >
-                        {isExpanded ? (
-                          <>
-                            <ChevronUp className="w-4 h-4" aria-hidden="true" />
-                            Hide simple steps
-                          </>
-                        ) : (
-                          <>
-                            <ChevronDown className="w-4 h-4" aria-hidden="true" />
-                            See {action.steps.length} simple steps
-                          </>
-                        )}
-                      </button>
+                    {(() => {
+                      const safeSteps = Array.isArray(action.steps) ? action.steps : [];
+                      if (safeSteps.length === 0) return null;
+                      return (
+                        <div className="mt-3">
+                          <button
+                            type="button"
+                            onClick={() => toggleExpand(action.id)}
+                            aria-expanded={isExpanded}
+                            className="min-h-[40px] inline-flex items-center gap-1.5 text-sm font-medium text-teal-800 hover:text-teal-950 py-1.5 cursor-pointer"
+                          >
+                            {isExpanded ? (
+                              <>
+                                <ChevronUp className="w-4 h-4" aria-hidden="true" />
+                                Hide simple steps
+                              </>
+                            ) : (
+                              <>
+                                <ChevronDown className="w-4 h-4" aria-hidden="true" />
+                                See {safeSteps.length} simple steps
+                              </>
+                            )}
+                          </button>
 
-                      {isExpanded && (
-                        <ol className="mt-2 space-y-2 pl-5 list-decimal text-sm text-slate-800 leading-relaxed">
-                          {action.steps.map((step, i) => (
-                            <li key={i}>{step}</li>
-                          ))}
-                        </ol>
-                      )}
-                    </div>
+                          {isExpanded && (
+                            <ol className="mt-2 space-y-2 pl-5 list-decimal text-sm text-slate-800 leading-relaxed">
+                              {safeSteps.map((step, i) => (
+                                <li key={i}>{step}</li>
+                              ))}
+                            </ol>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </div>
                 </div>
               </li>
